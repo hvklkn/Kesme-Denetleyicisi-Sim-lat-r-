@@ -24,7 +24,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.49.1",
-    "@tauri-apps/cli": "^2.5.0",
+    "@tauri-apps/cli": "^2.11.4",
     "@types/node": "^22.10.2",
     "@types/react": "^19.0.1",
     "@types/react-dom": "^19.0.2",
