@@ -1,0 +1,13 @@
+export const IRQ_LINE_COUNT = 8;
+export const REGISTER_BIT_WIDTH = IRQ_LINE_COUNT;
+export const BYTE_REGISTER_MASK = 0xff;
+export const FIRST_IRQ_LINE = 0;
+export const LAST_IRQ_LINE = IRQ_LINE_COUNT - 1;
+export const HIGHEST_MASKABLE_PRIORITY = 0;
+export const NON_MASKABLE_INTERRUPT_PRIORITY = -1;
+export const BINARY_RADIX = 2;
+export const HEX_RADIX = 16;
+export const HEX_REGISTER_WIDTH = 2;
+export const PRIORITY_DISPLAY_OFFSET = 1;
+export const DEFAULT_AUTO_STEP_INTERVAL_MS = 800;
+export const MAX_EVENT_LOG_ENTRIES = 200;
