@@ -3,6 +3,7 @@ import {
   HEX_RADIX,
   HEX_REGISTER_WIDTH,
   REGISTER_BIT_WIDTH,
+  WORD_HEX_WIDTH,
 } from "../domain/constants";
 import { normalizeRegisterValue } from "../domain/registers";
 
@@ -12,6 +13,10 @@ export function formatRegisterAsBinary(registerValue: number): string {
 
 export function formatRegisterAsHex(registerValue: number): string {
   return `0x${normalizeRegisterValue(registerValue).toString(HEX_RADIX).toUpperCase().padStart(HEX_REGISTER_WIDTH, "0")}`;
+}
+
+export function formatAddressAsHex(value: number, width = WORD_HEX_WIDTH): string {
+  return `0x${value.toString(HEX_RADIX).toUpperCase().padStart(width, "0")}`;
 }
 
 export function formatRegisterBits(registerValue: number): readonly boolean[] {

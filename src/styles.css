@@ -35,3 +35,36 @@ input {
   scrollbar-width: thin;
   scrollbar-color: #475569 #151b23;
 }
+
+.signal-line {
+  position: relative;
+  height: 2px;
+  background: #303844;
+}
+
+.signal-line-active {
+  background: #38bdf8;
+  box-shadow: 0 0 18px rgba(56, 189, 248, 0.5);
+}
+
+.signal-pulse {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: #e6edf3;
+  box-shadow: 0 0 16px rgba(56, 189, 248, 0.85);
+  transform: translateY(-50%);
+  animation: signal-pulse-move 1.2s linear infinite;
+}
+
+@keyframes signal-pulse-move {
+  from {
+    left: 0;
+  }
+  to {
+    left: calc(100% - 9px);
+  }
+}

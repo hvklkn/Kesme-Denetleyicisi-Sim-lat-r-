@@ -11,6 +11,7 @@ interface SimulationStore {
   createNonMaskableInterrupt(): void;
   toggleInterruptMask(line: number): void;
   setGlobalInterruptsEnabled(enabled: boolean): void;
+  setNestedInterruptsEnabled(enabled: boolean): void;
   step(): void;
   runAutomaticStep(): void;
   sendEndOfInterrupt(): void;
@@ -43,6 +44,10 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   },
   setGlobalInterruptsEnabled: (enabled) => {
     simulator.setGlobalInterruptsEnabled(enabled);
+    set({ snapshot: readSnapshot() });
+  },
+  setNestedInterruptsEnabled: (enabled) => {
+    simulator.setNestedInterruptsEnabled(enabled);
     set({ snapshot: readSnapshot() });
   },
   step: () => {

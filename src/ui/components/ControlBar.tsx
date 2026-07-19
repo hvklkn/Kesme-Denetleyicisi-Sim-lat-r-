@@ -19,6 +19,7 @@ export function ControlBar() {
           <button
             type="button"
             onClick={step}
+            aria-label="Simülasyonu bir adım ilerlet"
             className="inline-flex h-10 items-center gap-2 rounded-md border border-lab-line bg-lab-panelSoft px-4 text-sm font-semibold text-lab-text transition hover:border-lab-cyan hover:text-white"
           >
             <StepForward size={18} aria-hidden="true" />
@@ -28,6 +29,7 @@ export function ControlBar() {
             type="button"
             onClick={() => setAutoRunning(true)}
             disabled={isAutoRunning}
+            aria-label="Otomatik çalıştır"
             className="inline-flex h-10 items-center gap-2 rounded-md border border-lab-line bg-lab-panelSoft px-4 text-sm font-semibold text-lab-green transition hover:border-lab-green disabled:cursor-not-allowed disabled:opacity-45"
           >
             <Play size={18} aria-hidden="true" />
@@ -37,6 +39,7 @@ export function ControlBar() {
             type="button"
             onClick={() => setAutoRunning(false)}
             disabled={!isAutoRunning}
+            aria-label="Otomatik çalışmayı duraklat"
             className="inline-flex h-10 items-center gap-2 rounded-md border border-lab-line bg-lab-panelSoft px-4 text-sm font-semibold text-lab-amber transition hover:border-lab-amber disabled:cursor-not-allowed disabled:opacity-45"
           >
             <Pause size={18} aria-hidden="true" />
@@ -49,6 +52,7 @@ export function ControlBar() {
             type="button"
             onClick={sendEndOfInterrupt}
             disabled={!isWaitingForEoi}
+            aria-label="End of Interrupt gönder"
             className="inline-flex h-10 items-center gap-2 rounded-md border border-lab-line bg-lab-panelSoft px-4 text-sm font-semibold text-lab-cyan transition hover:border-lab-cyan disabled:cursor-not-allowed disabled:opacity-45"
           >
             <Send size={18} aria-hidden="true" />
@@ -57,6 +61,7 @@ export function ControlBar() {
           <button
             type="button"
             onClick={reset}
+            aria-label="Simülasyonu sıfırla"
             className="inline-flex h-10 items-center gap-2 rounded-md border border-lab-line bg-lab-panelSoft px-4 text-sm font-semibold text-lab-red transition hover:border-lab-red"
           >
             <RotateCcw size={18} aria-hidden="true" />

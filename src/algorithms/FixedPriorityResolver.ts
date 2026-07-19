@@ -19,6 +19,7 @@ export class FixedPriorityResolver implements InterruptPriorityResolver {
     }
 
     const eligibleLines = input.interruptLines
+      .filter((line) => line.enabled)
       .filter((line) => isRegisterBitSet(input.registers.irr, line.line))
       .filter((line) => !isRegisterBitSet(input.registers.imr, line.line))
       .sort((left, right) => left.priority - right.priority || left.line - right.line);
