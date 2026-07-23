@@ -28,6 +28,7 @@ import {
   setRegisterBit,
   type SimulationEvent,
   type SimulationSnapshot,
+  isVisibleInEventLog,
 } from "../domain";
 import { SystemSimulationClock, type SimulationClock } from "./SimulationClock";
 
@@ -35,6 +36,10 @@ export interface InterruptControllerSimulatorOptions {
   readonly interruptLines?: readonly InterruptLine[];
   readonly priorityResolver?: InterruptPriorityResolver;
   readonly clock?: SimulationClock;
+}
+
+interface AppendEventOptions {
+  readonly dedupeKey?: string;
 }
 
 export class InterruptControllerSimulator {
@@ -56,6 +61,7 @@ export class InterruptControllerSimulator {
   private nestedInterruptsEnabled = true;
   private timeline: InterruptTimelineEntry[] = [];
   private eventLog: SimulationEvent[] = [];
+  private readonly activeEventDedupeKeys = new Set<string>();
   private nextEventId = 1;
   private nextContextFrameId = 1;
   private nextTimelineCycleNumber = 1;
@@ -66,7 +72,7 @@ export class InterruptControllerSimulator {
 
     this.priorityResolver = options.priorityResolver ?? new FixedPriorityResolver();
     this.clock = options.clock ?? new SystemSimulationClock();
-    this.appendEvent(SimulationEventType.Reset, "Simülasyon hazırlandı.");
+    this.appendEvent(SimulationEventType.SimulationInitialized, "Simülasyon hazırlandı.");
   }
 
   public getSnapshot(): SimulationSnapshot {
@@ -95,13 +101,14 @@ export class InterruptControllerSimulator {
       ...this.registers,
       irr: setRegisterBit(this.registers.irr, line),
     };
+    this.clearInterruptBlockDedupeKeys(line);
     this.appendEvent(SimulationEventType.InterruptRaised, `IRQ${line} kesmesi oluşturuldu; IRR biti set edildi.`);
     this.evaluateInterruptDelivery();
   }
 
   public createNonMaskableInterrupt(): void {
     this.pendingNmi = true;
-    this.appendEvent(SimulationEventType.InterruptRaised, "NMI oluşturuldu; maske ve IF denetimi atlandı.");
+    this.appendEvent(SimulationEventType.NmiRaised, "NMI oluşturuldu; maske ve IF denetimi atlandı.");
     this.evaluateInterruptDelivery();
   }
 
@@ -111,7 +118,8 @@ export class InterruptControllerSimulator {
       ...this.registers,
       imr: setRegisterBit(this.registers.imr, line),
     };
-    this.appendEvent(SimulationEventType.MaskChanged, `IRQ${line} maskelendi; bekleyen istek IRR içinde korunur.`);
+    this.clearInterruptBlockDedupeKey(SimulationEventType.InterruptBlockedByCpuFlag, line);
+    this.appendEvent(SimulationEventType.InterruptMasked, `IRQ${line} maskelendi; bekleyen istek IRR içinde korunur.`);
     this.evaluateInterruptDelivery();
   }
 
@@ -121,7 +129,8 @@ export class InterruptControllerSimulator {
       ...this.registers,
       imr: clearRegisterBit(this.registers.imr, line),
     };
-    this.appendEvent(SimulationEventType.MaskChanged, `IRQ${line} maskesi kaldırıldı.`);
+    this.clearInterruptBlockDedupeKey(SimulationEventType.InterruptBlockedByMask, line);
+    this.appendEvent(SimulationEventType.InterruptUnmasked, `IRQ${line} maskesi kaldırıldı.`);
     this.evaluateInterruptDelivery();
   }
 
@@ -131,6 +140,9 @@ export class InterruptControllerSimulator {
       interruptsEnabled: enabled,
     };
     const stateText = enabled ? "açıldı" : "kapatıldı";
+    if (enabled) {
+      this.clearInterruptBlockDedupeKeysByType(SimulationEventType.InterruptBlockedByCpuFlag);
+    }
     this.appendEvent(SimulationEventType.CpuFlagChanged, `CPU global interrupt flag ${stateText}.`);
     this.evaluateInterruptDelivery();
   }
@@ -150,6 +162,14 @@ export class InterruptControllerSimulator {
     this.appendEvent(SimulationEventType.Halt, "CPU HALTED durumuna alındı.");
   }
 
+  public recordAutoStarted(): void {
+    this.appendEvent(SimulationEventType.AutoStarted, "Auto mode başlatıldı.");
+  }
+
+  public recordSimulationPaused(): void {
+    this.appendEvent(SimulationEventType.SimulationPaused, "Simülasyon duraklatıldı.");
+  }
+
   public step(): void {
     const timelineDescription = this.executeCurrentStep();
     this.appendTimelineEntry(timelineDescription);
@@ -157,7 +177,7 @@ export class InterruptControllerSimulator {
 
   public sendEndOfInterrupt(): void {
     if (this.cpu.executionState !== CpuExecutionState.WaitingForEoi || !this.activeIsr) {
-      this.appendEvent(SimulationEventType.EndOfInterrupt, "EOI yok sayıldı; aktif ISR bekleme durumu yok.");
+      this.appendEvent(SimulationEventType.EoiSent, "EOI yok sayıldı; aktif ISR bekleme durumu yok.");
       return;
     }
 
@@ -168,11 +188,11 @@ export class InterruptControllerSimulator {
         isr: clearRegisterBit(this.registers.isr, completedIsr.interrupt.line),
       };
       this.appendEvent(
-        SimulationEventType.EndOfInterrupt,
+        SimulationEventType.EoiSent,
         `EOI alındı; IRQ${completedIsr.interrupt.line} ISR biti temizlendi.`,
       );
     } else {
-      this.appendEvent(SimulationEventType.EndOfInterrupt, "NMI ISR akışı için EOI alındı.");
+      this.appendEvent(SimulationEventType.EoiSent, "NMI ISR akışı için EOI alındı.");
     }
 
     this.cpu = {
@@ -197,10 +217,11 @@ export class InterruptControllerSimulator {
     this.nestedInterruptsEnabled = true;
     this.timeline = [];
     this.eventLog = [];
+    this.activeEventDedupeKeys.clear();
     this.nextEventId = 1;
     this.nextContextFrameId = 1;
     this.nextTimelineCycleNumber = 1;
-    this.appendEvent(SimulationEventType.Reset, "Simülasyon sıfırlandı; IRR, IMR, ISR, context stack ve timeline temizlendi.");
+    this.appendEvent(SimulationEventType.SimulationReset, "Simülasyon sıfırlandı; IRR, IMR, ISR, context stack ve timeline temizlendi.");
   }
 
   public isInterruptLineMasked(line: number): boolean {
@@ -278,7 +299,7 @@ export class InterruptControllerSimulator {
         ...this.cpu,
         executionState: this.activeIsr ? CpuExecutionState.ExecutingIsr : CpuExecutionState.Running,
       };
-      this.appendEvent(SimulationEventType.Acknowledge, "Acknowledge iptal edildi; seçilmiş kesme yok.");
+      this.appendEvent(SimulationEventType.InterruptAccepted, "Acknowledge iptal edildi; seçilmiş kesme yok.");
       return "ACK iptal";
     }
 
@@ -298,18 +319,19 @@ export class InterruptControllerSimulator {
     }
 
     if (acceptedInterrupt.kind === InterruptKind.Maskable && acceptedInterrupt.line !== null) {
+      this.clearInterruptBlockDedupeKeys(acceptedInterrupt.line);
       this.registers = {
         ...this.registers,
         irr: clearRegisterBit(this.registers.irr, acceptedInterrupt.line),
         isr: setRegisterBit(this.registers.isr, acceptedInterrupt.line),
       };
       this.appendEvent(
-        SimulationEventType.Acknowledge,
+        SimulationEventType.InterruptAccepted,
         `CPU IRQ${acceptedInterrupt.line} kesmesini kabul etti; IRR temizlendi ve ISR set edildi.`,
       );
     } else {
       this.pendingNmi = false;
-      this.appendEvent(SimulationEventType.Acknowledge, "CPU NMI kesmesini kabul etti.");
+      this.appendEvent(SimulationEventType.InterruptAccepted, "CPU NMI kesmesini kabul etti.");
     }
 
     this.cpu = {
@@ -375,6 +397,7 @@ export class InterruptControllerSimulator {
         ...this.cpu,
         executionState: CpuExecutionState.WaitingForEoi,
       };
+      this.appendEvent(SimulationEventType.IsrCompleted, `${this.activeIsr.interrupt.label} ISR tamamlandı; EOI bekleniyor.`);
       this.appendEvent(SimulationEventType.IsrCycleExecuted, `${this.activeIsr.interrupt.label} ISR cycle süresi tamamlandı; EOI bekleniyor.`);
       return `${this.activeIsr.interrupt.label} ISR tamam`;
     }
@@ -395,6 +418,7 @@ export class InterruptControllerSimulator {
         ...this.cpu,
         executionState: CpuExecutionState.WaitingForEoi,
       };
+      this.appendEvent(SimulationEventType.IsrCompleted, `${advancedIsr.interrupt.label} ISR tamamlandı; EOI bekleniyor.`);
     }
 
     return `${advancedIsr.interrupt.label} ISR ${advancedIsr.elapsedCycles}/${advancedIsr.totalCycles}`;
@@ -451,7 +475,7 @@ export class InterruptControllerSimulator {
       ...this.cpu,
       executionState: CpuExecutionState.Running,
     };
-    this.appendEvent(SimulationEventType.ReturnedToMainProgram, "Tüm ISR stack boşaldı; ana programa dönüldü.");
+    this.appendEvent(SimulationEventType.ReturnedToMainProgram, "CPU ana programa döndü.");
     return "Main Program dönüş";
   }
 
@@ -571,18 +595,24 @@ export class InterruptControllerSimulator {
     const pendingMaskableLines = this.interruptLines.filter((line) => isRegisterBitSet(this.registers.irr, line.line));
     const maskedLines = pendingMaskableLines.filter((line) => isRegisterBitSet(this.registers.imr, line.line));
     for (const line of maskedLines) {
+      const dedupeKey = this.createInterruptBlockDedupeKey(SimulationEventType.InterruptBlockedByMask, line.line);
       this.appendEvent(
         SimulationEventType.InterruptBlockedByMask,
         `IRQ${line.line} maskeli olduğu için CPU'ya iletilmedi; IRR içinde bekliyor.`,
+        { dedupeKey },
       );
     }
 
     const unmaskedPendingLines = pendingMaskableLines.filter((line) => !isRegisterBitSet(this.registers.imr, line.line));
     if (!this.cpu.interruptsEnabled && unmaskedPendingLines.length > 0) {
-      this.appendEvent(
-        SimulationEventType.InterruptBlockedByCpuFlag,
-        "CPU global interrupt flag kapalı olduğu için maskelenebilir kesmeler işlenmedi.",
-      );
+      for (const line of unmaskedPendingLines) {
+        const dedupeKey = this.createInterruptBlockDedupeKey(SimulationEventType.InterruptBlockedByCpuFlag, line.line);
+        this.appendEvent(
+          SimulationEventType.InterruptBlockedByCpuFlag,
+          `IRQ${line.line} IF kapalı olduğu için CPU'ya iletilmedi; IRR içinde bekliyor.`,
+          { dedupeKey },
+        );
+      }
     }
   }
 
@@ -611,7 +641,18 @@ export class InterruptControllerSimulator {
     this.appendEvent(SimulationEventType.TimelineAdvanced, `Timeline cycle ${entry.cycleNumber}: ${description}.`);
   }
 
-  private appendEvent(type: SimulationEventType, message: string): void {
+  private appendEvent(type: SimulationEventType, message: string, options: AppendEventOptions = {}): void {
+    if (!isVisibleInEventLog(type)) {
+      return;
+    }
+
+    if (options.dedupeKey) {
+      if (this.activeEventDedupeKeys.has(options.dedupeKey)) {
+        return;
+      }
+      this.activeEventDedupeKeys.add(options.dedupeKey);
+    }
+
     const event: SimulationEvent = {
       id: this.nextEventId,
       timestamp: this.clock.now().toISOString(),
@@ -623,6 +664,28 @@ export class InterruptControllerSimulator {
 
     this.nextEventId += 1;
     this.eventLog = [...this.eventLog, event].slice(-MAX_EVENT_LOG_ENTRIES);
+  }
+
+  private createInterruptBlockDedupeKey(type: SimulationEventType, line: number): string {
+    return `${type}:IRQ${line}`;
+  }
+
+  private clearInterruptBlockDedupeKeys(line: number): void {
+    this.clearInterruptBlockDedupeKey(SimulationEventType.InterruptBlockedByMask, line);
+    this.clearInterruptBlockDedupeKey(SimulationEventType.InterruptBlockedByCpuFlag, line);
+  }
+
+  private clearInterruptBlockDedupeKey(type: SimulationEventType, line: number): void {
+    this.activeEventDedupeKeys.delete(this.createInterruptBlockDedupeKey(type, line));
+  }
+
+  private clearInterruptBlockDedupeKeysByType(type: SimulationEventType): void {
+    const keyPrefix = `${type}:`;
+    for (const key of this.activeEventDedupeKeys) {
+      if (key.startsWith(keyPrefix)) {
+        this.activeEventDedupeKeys.delete(key);
+      }
+    }
   }
 
   private resolveVisibleActiveInterrupt(): InterruptVector | null {

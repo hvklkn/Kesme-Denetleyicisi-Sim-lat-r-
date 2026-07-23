@@ -77,3 +77,24 @@ test("reset sonrası temiz başlangıç gösterilir", async ({ page }) => {
   await expect(page.getByTestId("context-stack-empty")).toBeVisible();
   await expect(page.getByText("Simülasyon sıfırlandı; IRR, IMR, ISR, context stack ve timeline temizlendi.")).toBeVisible();
 });
+
+test("auto mod maskeli IRQ beklerken Event Log tekrarlarını yığmaz", async ({ page }) => {
+  await page.getByRole("button", { name: "IRQ0 mask değiştir" }).click();
+  await page.getByRole("button", { name: "IRQ0 kesme oluştur" }).click();
+  await page.getByRole("button", { name: "Otomatik çalıştır" }).click();
+
+  await expect
+    .poll(async () => {
+      const timelineText = await page.getByTestId("interrupt-timeline").textContent();
+      const newestCycle = timelineText?.match(/Cycle (\d+)/)?.[1];
+      return newestCycle === undefined ? 0 : Number(newestCycle);
+    })
+    .toBeGreaterThanOrEqual(3);
+
+  await page.getByRole("button", { name: "Otomatik çalışmayı duraklat" }).click();
+
+  const eventLog = page.getByTestId("event-log");
+  await expect(eventLog.getByText("IRQ0 maskeli olduğu için CPU'ya iletilmedi; IRR içinde bekliyor.")).toHaveCount(1);
+  await expect(eventLog).not.toContainText("Timeline cycle");
+  await expect(eventLog.getByText("CPU ana programı çalıştırıyor")).toHaveCount(0);
+});

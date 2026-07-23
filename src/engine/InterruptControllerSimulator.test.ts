@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { CpuExecutionState, INITIAL_PROGRAM_COUNTER, InterruptKind } from "../domain";
+import {
+  CpuExecutionState,
+  INITIAL_PROGRAM_COUNTER,
+  InterruptKind,
+  MAX_EVENT_LOG_ENTRIES,
+  type SimulationEvent,
+  SimulationEventType,
+} from "../domain";
 import { isRegisterBitSet } from "../domain/registers";
 import { InterruptControllerSimulator } from "./InterruptControllerSimulator";
 
@@ -40,6 +47,16 @@ function runActiveIsrCycles(simulator: InterruptControllerSimulator, cycleCount:
 function acknowledgeNestedInterrupt(simulator: InterruptControllerSimulator): void {
   advanceUntil(simulator, CpuExecutionState.Acknowledging);
   simulator.step();
+}
+
+function stepMany(simulator: InterruptControllerSimulator, count: number): void {
+  for (let index = 0; index < count; index += 1) {
+    simulator.step();
+  }
+}
+
+function eventsByType(simulator: InterruptControllerSimulator, type: SimulationEventType): readonly SimulationEvent[] {
+  return simulator.getSnapshot().eventLog.filter((event) => event.type === type);
 }
 
 describe("InterruptControllerSimulator", () => {
@@ -362,5 +379,144 @@ describe("InterruptControllerSimulator", () => {
     expect(snapshot.activeInterrupt?.kind).toBe(InterruptKind.NonMaskable);
     expect(snapshot.activeIsrStack).toHaveLength(1);
     expect(isRegisterBitSet(snapshot.registers.irr, IRQ1)).toBe(true);
+  });
+
+  it("MAIN durumunda art arda step çalıştırıldığında normal CPU mesajlarını yığmaz", () => {
+    const simulator = new InterruptControllerSimulator();
+
+    stepMany(simulator, 20);
+
+    const normalCpuMessages = simulator
+      .getSnapshot()
+      .eventLog.filter((event) => event.message === "CPU ana programı çalıştırıyor; PC bir sonraki komuta ilerledi.");
+    expect(normalCpuMessages).toHaveLength(0);
+  });
+
+  it("Timeline art arda step sonunda her cycle için ilerler", () => {
+    const simulator = new InterruptControllerSimulator();
+
+    stepMany(simulator, 20);
+
+    const timeline = simulator.getSnapshot().timeline;
+    expect(timeline).toHaveLength(20);
+    expect(timeline.at(-1)?.cycleNumber).toBe(20);
+  });
+
+  it("maskeli IRQ için InterruptBlockedByMask olayı yalnızca bir kez oluşturulur", () => {
+    const simulator = new InterruptControllerSimulator();
+
+    simulator.maskInterruptLine(IRQ0);
+    simulator.createInterrupt(IRQ0);
+
+    expect(eventsByType(simulator, SimulationEventType.InterruptBlockedByMask)).toHaveLength(1);
+  });
+
+  it("aynı maskeli IRQ sonraki cycle'larda beklerken tekrar loglanmaz", () => {
+    const simulator = new InterruptControllerSimulator();
+
+    simulator.maskInterruptLine(IRQ0);
+    simulator.createInterrupt(IRQ0);
+    stepMany(simulator, 8);
+
+    expect(eventsByType(simulator, SimulationEventType.InterruptBlockedByMask)).toHaveLength(1);
+  });
+
+  it("IRQ maskesi kaldırılıp tekrar maskelendiğinde engelleme olayı yeniden loglanabilir", () => {
+    const simulator = new InterruptControllerSimulator();
+
+    simulator.maskInterruptLine(IRQ0);
+    simulator.createInterrupt(IRQ0);
+    simulator.unmaskInterruptLine(IRQ0);
+    simulator.maskInterruptLine(IRQ0);
+
+    const blockedEvents = eventsByType(simulator, SimulationEventType.InterruptBlockedByMask);
+    expect(blockedEvents).toHaveLength(2);
+    expect(blockedEvents.every((event) => event.message.includes("IRQ0 maskeli olduğu için"))).toBe(true);
+  });
+
+  it("farklı maskeli IRQ'lar ayrı engelleme olayları olarak loglanır", () => {
+    const simulator = new InterruptControllerSimulator();
+
+    simulator.maskInterruptLine(IRQ0);
+    simulator.maskInterruptLine(IRQ1);
+    simulator.createInterrupt(IRQ0);
+    simulator.createInterrupt(IRQ1);
+
+    const blockedMessages = eventsByType(simulator, SimulationEventType.InterruptBlockedByMask).map((event) => event.message);
+    expect(blockedMessages).toHaveLength(2);
+    expect(blockedMessages).toContain("IRQ0 maskeli olduğu için CPU'ya iletilmedi; IRR içinde bekliyor.");
+    expect(blockedMessages).toContain("IRQ1 maskeli olduğu için CPU'ya iletilmedi; IRR içinde bekliyor.");
+  });
+
+  it("TimelineAdvanced olaylarını Event Log görünümüne dahil etmez", () => {
+    const simulator = new InterruptControllerSimulator();
+
+    simulator.step();
+
+    const snapshot = simulator.getSnapshot();
+    expect(snapshot.timeline).toHaveLength(1);
+    expect(eventsByType(simulator, SimulationEventType.TimelineAdvanced)).toHaveLength(0);
+    expect(snapshot.eventLog.some((event) => event.message.startsWith("Timeline cycle"))).toBe(false);
+  });
+
+  it("IsrCycleExecuted olaylarını Event Log görünümüne dahil etmez", () => {
+    const simulator = new InterruptControllerSimulator();
+
+    startMaskableIsr(simulator, IRQ1);
+    simulator.step();
+
+    expect(eventsByType(simulator, SimulationEventType.IsrCycleExecuted)).toHaveLength(0);
+    expect(simulator.getSnapshot().eventLog.some((event) => event.message.includes("ISR çalışıyor:"))).toBe(false);
+  });
+
+  it("IRQ kabulü, ISR başlangıcı, EOI ve restore olaylarını Event Log'da gösterir", () => {
+    const simulator = new InterruptControllerSimulator();
+
+    startMaskableIsr(simulator, IRQ1);
+    runActiveIsrCycles(simulator, IRQ1_DURATION_CYCLES);
+    simulator.sendEndOfInterrupt();
+    simulator.step();
+
+    const eventTypes = simulator.getSnapshot().eventLog.map((event) => event.type);
+    expect(eventTypes).toContain(SimulationEventType.InterruptAccepted);
+    expect(eventTypes).toContain(SimulationEventType.IsrStarted);
+    expect(eventTypes).toContain(SimulationEventType.EoiSent);
+    expect(eventTypes).toContain(SimulationEventType.ContextPopped);
+    expect(eventTypes).toContain(SimulationEventType.ContextRestored);
+  });
+
+  it("reset sonrası eski dedupe durumu bekleyen IRQ kalmadığında taşınmaz", () => {
+    const simulator = new InterruptControllerSimulator();
+
+    simulator.maskInterruptLine(IRQ0);
+    simulator.createInterrupt(IRQ0);
+    simulator.reset();
+    simulator.step();
+
+    expect(eventsByType(simulator, SimulationEventType.InterruptBlockedByMask)).toHaveLength(0);
+  });
+
+  it("reset sonrası aynı olay yeniden gerçekleşirse log yazılabilir", () => {
+    const simulator = new InterruptControllerSimulator();
+
+    simulator.maskInterruptLine(IRQ0);
+    simulator.createInterrupt(IRQ0);
+    simulator.reset();
+    simulator.maskInterruptLine(IRQ0);
+    simulator.createInterrupt(IRQ0);
+
+    expect(eventsByType(simulator, SimulationEventType.InterruptBlockedByMask)).toHaveLength(1);
+  });
+
+  it("Event Log maksimum kayıt sınırını aşmaz", () => {
+    const simulator = new InterruptControllerSimulator();
+
+    for (let index = 0; index < MAX_EVENT_LOG_ENTRIES + 20; index += 1) {
+      const line = index % 8;
+      simulator.maskInterruptLine(line);
+      simulator.unmaskInterruptLine(line);
+    }
+
+    expect(simulator.getSnapshot().eventLog.length).toBeLessThanOrEqual(MAX_EVENT_LOG_ENTRIES);
   });
 });

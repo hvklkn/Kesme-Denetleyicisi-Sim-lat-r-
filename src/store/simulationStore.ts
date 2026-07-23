@@ -71,5 +71,19 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
     simulator.reset();
     set({ snapshot: readSnapshot(), isAutoRunning: false });
   },
-  setAutoRunning: (isAutoRunning) => set({ isAutoRunning }),
+  setAutoRunning: (isAutoRunning) => {
+    const wasAutoRunning = get().isAutoRunning;
+    if (wasAutoRunning === isAutoRunning) {
+      set({ isAutoRunning });
+      return;
+    }
+
+    if (isAutoRunning) {
+      simulator.recordAutoStarted();
+    } else {
+      simulator.recordSimulationPaused();
+    }
+
+    set({ snapshot: readSnapshot(), isAutoRunning });
+  },
 }));
